@@ -23,11 +23,10 @@ import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.taskmanager.TaskActions;
-
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 
@@ -112,6 +111,6 @@ public class UnionInputGateTest {
 
 		// Return null when the input gate has received all end-of-partition events
 		assertTrue(union.isFinished());
-		assertFalse(union.getNextBufferOrEvent().isPresent());
+		assertNull(union.getNextBufferOrEvent());
 	}
 }

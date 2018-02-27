@@ -538,20 +538,20 @@ public class OneInputStreamTaskTest extends TestLogger {
 
 		restoredTaskHarness.configureForKeyedStream(keySelector, BasicTypeInfo.STRING_TYPE_INFO);
 
-		restoredTaskHarness.setTaskStateSnapshot(checkpointId, taskStateManager.getLastJobManagerTaskStateSnapshot());
+		restoredTaskHarness.setTaskStateSnapshot(checkpointId, taskStateManager.getLastTaskStateSnapshot());
 
 		StreamConfig restoredTaskStreamConfig = restoredTaskHarness.getStreamConfig();
 
 		configureChainedTestingStreamOperator(restoredTaskStreamConfig, numberChainedTasks);
 
-		TaskStateSnapshot stateHandles = taskStateManager.getLastJobManagerTaskStateSnapshot();
+		TaskStateSnapshot stateHandles = taskStateManager.getLastTaskStateSnapshot();
 		Assert.assertEquals(numberChainedTasks, stateHandles.getSubtaskStateMappings().size());
 
 		TestingStreamOperator.numberRestoreCalls = 0;
 
 		// transfer state to new harness
 		restoredTaskHarness.taskStateManager.restoreLatestCheckpointState(
-			taskStateManager.getJobManagerTaskStateSnapshotsByCheckpointId());
+			taskStateManager.getTaskStateSnapshotsByCheckpointId());
 		restoredTaskHarness.invoke();
 		restoredTaskHarness.endInput();
 		restoredTaskHarness.waitForTaskCompletion(deadline.timeLeft().toMillis());

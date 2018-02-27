@@ -23,8 +23,8 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.fs.CloseableRegistry;
 import org.apache.flink.core.fs.FSDataInputStream;
-import org.apache.flink.runtime.checkpoint.PrioritizedOperatorSubtaskState;
-import org.apache.flink.runtime.checkpoint.StateObjectCollection;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
@@ -117,8 +117,10 @@ public class StreamTaskStateInitializerImpl implements StreamTaskStateInitialize
 
 		final String operatorIdentifierText = operatorSubtaskDescription.toString();
 
-		final PrioritizedOperatorSubtaskState prioritizedOperatorSubtaskStates =
-			taskStateManager.prioritizedOperatorState(operatorID);
+		final OperatorSubtaskState operatorSubtaskStateFromJobManager =
+			taskStateManager.operatorStates(operatorID);
+
+		final boolean restoring = (operatorSubtaskStateFromJobManager != null);
 
 		AbstractKeyedStateBackend<?> keyedStatedBackend = null;
 		OperatorStateBackend operatorStateBackend = null;
@@ -132,22 +134,20 @@ public class StreamTaskStateInitializerImpl implements StreamTaskStateInitialize
 			keyedStatedBackend = keyedStatedBackend(
 				keySerializer,
 				operatorIdentifierText,
-				prioritizedOperatorSubtaskStates,
+				operatorSubtaskStateFromJobManager,
 				streamTaskCloseableRegistry);
 
 			// -------------- Operator State Backend --------------
 			operatorStateBackend = operatorStateBackend(
 				operatorIdentifierText,
-				prioritizedOperatorSubtaskStates,
+				operatorSubtaskStateFromJobManager,
 				streamTaskCloseableRegistry);
 
 			// -------------- Raw State Streams --------------
-			rawKeyedStateInputs = rawKeyedStateInputs(
-				prioritizedOperatorSubtaskStates.getPrioritizedRawKeyedState().iterator());
+			rawKeyedStateInputs = rawKeyedStateInputs(operatorSubtaskStateFromJobManager);
 			streamTaskCloseableRegistry.registerCloseable(rawKeyedStateInputs);
 
-			rawOperatorStateInputs = rawOperatorStateInputs(
-				prioritizedOperatorSubtaskStates.getPrioritizedRawOperatorState().iterator());
+			rawOperatorStateInputs = rawOperatorStateInputs(operatorSubtaskStateFromJobManager);
 			streamTaskCloseableRegistry.registerCloseable(rawOperatorStateInputs);
 
 			// -------------- Internal Timer Service Manager --------------
@@ -156,7 +156,7 @@ public class StreamTaskStateInitializerImpl implements StreamTaskStateInitialize
 			// -------------- Preparing return value --------------
 
 			return new StreamOperatorStateContextImpl(
-				prioritizedOperatorSubtaskStates.isRestored(),
+				restoring,
 				operatorStateBackend,
 				keyedStatedBackend,
 				timeServiceManager,
@@ -214,7 +214,7 @@ public class StreamTaskStateInitializerImpl implements StreamTaskStateInitialize
 				"Key Group " + keyGroupIdx + " does not belong to the local range.");
 
 			timeServiceManager.restoreStateForKeyGroup(
-				streamProvider.getStream(),
+				new DataInputViewStreamWrapper(streamProvider.getStream()),
 				keyGroupIdx, environment.getUserClassLoader());
 		}
 
@@ -223,32 +223,139 @@ public class StreamTaskStateInitializerImpl implements StreamTaskStateInitialize
 
 	protected OperatorStateBackend operatorStateBackend(
 		String operatorIdentifierText,
-		PrioritizedOperatorSubtaskState prioritizedOperatorSubtaskStates,
+		OperatorSubtaskState operatorSubtaskStateFromJobManager,
 		CloseableRegistry backendCloseableRegistry) throws Exception {
 
-		String logDescription = "operator state backend for " + operatorIdentifierText;
+		//TODO search in local state for a local recovery opportunity.
 
-		BackendRestorerProcedure<OperatorStateBackend, OperatorStateHandle> backendRestorer =
-			new BackendRestorerProcedure<>(
-				() -> stateBackend.createOperatorStateBackend(environment, operatorIdentifierText),
-				backendCloseableRegistry,
-				logDescription);
-
-		return backendRestorer.createAndRestore(
-			prioritizedOperatorSubtaskStates.getPrioritizedManagedOperatorState());
+		return createOperatorStateBackendFromJobManagerState(
+			operatorIdentifierText,
+			operatorSubtaskStateFromJobManager,
+			backendCloseableRegistry);
 	}
 
 	protected <K> AbstractKeyedStateBackend<K> keyedStatedBackend(
 		TypeSerializer<K> keySerializer,
 		String operatorIdentifierText,
-		PrioritizedOperatorSubtaskState prioritizedOperatorSubtaskStates,
+		OperatorSubtaskState operatorSubtaskStateFromJobManager,
 		CloseableRegistry backendCloseableRegistry) throws Exception {
 
 		if (keySerializer == null) {
 			return null;
 		}
 
-		String logDescription = "keyed state backend for " + operatorIdentifierText;
+		//TODO search in local state for a local recovery opportunity.
+
+		return createKeyedStatedBackendFromJobManagerState(
+			keySerializer,
+			operatorIdentifierText,
+			operatorSubtaskStateFromJobManager,
+			backendCloseableRegistry);
+	}
+
+	protected CloseableIterable<StatePartitionStreamProvider> rawOperatorStateInputs(
+		OperatorSubtaskState operatorSubtaskStateFromJobManager) {
+
+		if (operatorSubtaskStateFromJobManager != null) {
+
+			final CloseableRegistry closeableRegistry = new CloseableRegistry();
+
+			Collection<OperatorStateHandle> rawOperatorState =
+				operatorSubtaskStateFromJobManager.getRawOperatorState();
+
+			return new CloseableIterable<StatePartitionStreamProvider>() {
+				@Override
+				public void close() throws IOException {
+					closeableRegistry.close();
+				}
+
+				@Nonnull
+				@Override
+				public Iterator<StatePartitionStreamProvider> iterator() {
+					return new OperatorStateStreamIterator(
+						DefaultOperatorStateBackend.DEFAULT_OPERATOR_STATE_NAME,
+						rawOperatorState.iterator(), closeableRegistry);
+				}
+			};
+		}
+
+		return CloseableIterable.empty();
+	}
+
+	protected CloseableIterable<KeyGroupStatePartitionStreamProvider> rawKeyedStateInputs(
+		OperatorSubtaskState operatorSubtaskStateFromJobManager) {
+
+		if (operatorSubtaskStateFromJobManager != null) {
+
+			Collection<KeyedStateHandle> rawKeyedState = operatorSubtaskStateFromJobManager.getRawKeyedState();
+			Collection<KeyGroupsStateHandle> keyGroupsStateHandles = transform(rawKeyedState);
+			final CloseableRegistry closeableRegistry = new CloseableRegistry();
+
+			return new CloseableIterable<KeyGroupStatePartitionStreamProvider>() {
+				@Override
+				public void close() throws IOException {
+					closeableRegistry.close();
+				}
+
+				@Override
+				public Iterator<KeyGroupStatePartitionStreamProvider> iterator() {
+					return new KeyGroupStreamIterator(keyGroupsStateHandles.iterator(), closeableRegistry);
+				}
+			};
+		}
+
+		return CloseableIterable.empty();
+	}
+
+	// =================================================================================================================
+
+	private OperatorStateBackend createOperatorStateBackendFromJobManagerState(
+		String operatorIdentifierText,
+		OperatorSubtaskState operatorSubtaskStateFromJobManager,
+		CloseableRegistry backendCloseableRegistry) throws Exception {
+
+		final OperatorStateBackend operatorStateBackend =
+			stateBackend.createOperatorStateBackend(environment, operatorIdentifierText);
+
+		backendCloseableRegistry.registerCloseable(operatorStateBackend);
+
+		Collection<OperatorStateHandle> managedOperatorState = null;
+
+		if (operatorSubtaskStateFromJobManager != null) {
+			managedOperatorState = operatorSubtaskStateFromJobManager.getManagedOperatorState();
+		}
+
+		operatorStateBackend.restore(managedOperatorState);
+
+		return operatorStateBackend;
+	}
+
+	private <K> AbstractKeyedStateBackend<K> createKeyedStatedBackendFromJobManagerState(
+		TypeSerializer<K> keySerializer,
+		String operatorIdentifierText,
+		OperatorSubtaskState operatorSubtaskStateFromJobManager,
+		CloseableRegistry backendCloseableRegistry) throws Exception {
+
+		final AbstractKeyedStateBackend<K> keyedStateBackend = createKeyedStateBackend(
+			operatorIdentifierText,
+			keySerializer);
+
+		backendCloseableRegistry.registerCloseable(keyedStateBackend);
+
+		Collection<KeyedStateHandle> managedKeyedState = null;
+
+		if (operatorSubtaskStateFromJobManager != null) {
+			managedKeyedState = operatorSubtaskStateFromJobManager.getManagedKeyedState();
+		}
+
+		keyedStateBackend.restore(managedKeyedState);
+
+		return keyedStateBackend;
+	}
+
+	private <K> AbstractKeyedStateBackend<K> createKeyedStateBackend(
+		String operatorIdentifier,
+		TypeSerializer<K> keySerializer) throws Exception {
 
 		TaskInfo taskInfo = environment.getTaskInfo();
 
@@ -257,88 +364,14 @@ public class StreamTaskStateInitializerImpl implements StreamTaskStateInitialize
 			taskInfo.getNumberOfParallelSubtasks(),
 			taskInfo.getIndexOfThisSubtask());
 
-		BackendRestorerProcedure<AbstractKeyedStateBackend<K>, KeyedStateHandle> backendRestorer =
-			new BackendRestorerProcedure<>(
-				() -> stateBackend.createKeyedStateBackend(
-					environment,
-					environment.getJobID(),
-					operatorIdentifierText,
-					keySerializer,
-					taskInfo.getMaxNumberOfParallelSubtasks(),
-					keyGroupRange,
-					environment.getTaskKvStateRegistry()),
-				backendCloseableRegistry,
-				logDescription);
-
-		return backendRestorer.createAndRestore(
-			prioritizedOperatorSubtaskStates.getPrioritizedManagedKeyedState());
-	}
-
-	protected CloseableIterable<StatePartitionStreamProvider> rawOperatorStateInputs(
-		Iterator<StateObjectCollection<OperatorStateHandle>> restoreStateAlternatives) {
-
-		if (restoreStateAlternatives.hasNext()) {
-
-			final CloseableRegistry closeableRegistry = new CloseableRegistry();
-
-			Collection<OperatorStateHandle> rawOperatorState = restoreStateAlternatives.next();
-			// TODO currently this does not support local state recovery, so we expect there is only one handle.
-			Preconditions.checkState(
-				!restoreStateAlternatives.hasNext(),
-				"Local recovery is currently not implemented for raw operator state, but found state alternative.");
-
-			if (rawOperatorState != null) {
-
-				return new CloseableIterable<StatePartitionStreamProvider>() {
-					@Override
-					public void close() throws IOException {
-						closeableRegistry.close();
-					}
-
-					@Nonnull
-					@Override
-					public Iterator<StatePartitionStreamProvider> iterator() {
-						return new OperatorStateStreamIterator(
-							DefaultOperatorStateBackend.DEFAULT_OPERATOR_STATE_NAME,
-							rawOperatorState.iterator(), closeableRegistry);
-					}
-				};
-			}
-		}
-
-		return CloseableIterable.empty();
-	}
-
-	protected CloseableIterable<KeyGroupStatePartitionStreamProvider> rawKeyedStateInputs(
-		Iterator<StateObjectCollection<KeyedStateHandle>> restoreStateAlternatives) {
-
-		if (restoreStateAlternatives.hasNext()) {
-			Collection<KeyedStateHandle> rawKeyedState = restoreStateAlternatives.next();
-
-			// TODO currently this does not support local state recovery, so we expect there is only one handle.
-			Preconditions.checkState(
-				!restoreStateAlternatives.hasNext(),
-				"Local recovery is currently not implemented for raw keyed state, but found state alternative.");
-
-			if (rawKeyedState != null) {
-				Collection<KeyGroupsStateHandle> keyGroupsStateHandles = transform(rawKeyedState);
-				final CloseableRegistry closeableRegistry = new CloseableRegistry();
-
-				return new CloseableIterable<KeyGroupStatePartitionStreamProvider>() {
-					@Override
-					public void close() throws IOException {
-						closeableRegistry.close();
-					}
-
-					@Override
-					public Iterator<KeyGroupStatePartitionStreamProvider> iterator() {
-						return new KeyGroupStreamIterator(keyGroupsStateHandles.iterator(), closeableRegistry);
-					}
-				};
-			}
-		}
-
-		return CloseableIterable.empty();
+		return stateBackend.createKeyedStateBackend(
+			environment,
+			environment.getJobID(),
+			operatorIdentifier,
+			keySerializer,
+			taskInfo.getMaxNumberOfParallelSubtasks(), //TODO check: this is numberOfKeyGroups !!!!
+			keyGroupRange,
+			environment.getTaskKvStateRegistry());
 	}
 
 	// =================================================================================================================

@@ -354,10 +354,11 @@ public class CheckpointCoordinator {
 	 * @throws IllegalStateException If no savepoint directory has been
 	 *                               specified and no default savepoint directory has been
 	 *                               configured
+	 * @throws Exception             Failures during triggering are forwarded
 	 */
 	public CompletableFuture<CompletedCheckpoint> triggerSavepoint(
 			long timestamp,
-			@Nullable String targetLocation) {
+			@Nullable String targetLocation) throws Exception {
 
 		CheckpointProperties props = CheckpointProperties.forSavepoint();
 
@@ -370,7 +371,7 @@ public class CheckpointCoordinator {
 		if (triggerResult.isSuccess()) {
 			return triggerResult.getPendingCheckpoint().getCompletionFuture();
 		} else {
-			Throwable cause = new CheckpointTriggerException("Failed to trigger savepoint.", triggerResult.getFailureReason());
+			Throwable cause = new Exception("Failed to trigger savepoint: " + triggerResult.getFailureReason().message());
 			return FutureUtils.completedExceptionally(cause);
 		}
 	}
@@ -965,7 +966,7 @@ public class CheckpointCoordinator {
 	 * Restores the latest checkpointed state.
 	 *
 	 * @param tasks Map of job vertices to restore. State for these vertices is
-	 * restored via {@link Execution#setInitialState(JobManagerTaskRestore)}.
+	 * restored via {@link Execution#setInitialState(TaskStateSnapshot)}.
 	 * @param errorIfNoCheckpoint Fail if no completed checkpoint is available to
 	 * restore from.
 	 * @param allowNonRestoredState Allow checkpoint state that cannot be mapped
@@ -1064,7 +1065,7 @@ public class CheckpointCoordinator {
 	 *                         mapped to any job vertex in tasks.
 	 * @param tasks            Map of job vertices to restore. State for these
 	 *                         vertices is restored via
-	 *                         {@link Execution#setInitialState(JobManagerTaskRestore)}.
+	 *                         {@link Execution#setInitialState(TaskStateSnapshot)}.
 	 * @param userClassLoader  The class loader to resolve serialized classes in
 	 *                         legacy savepoint versions.
 	 */

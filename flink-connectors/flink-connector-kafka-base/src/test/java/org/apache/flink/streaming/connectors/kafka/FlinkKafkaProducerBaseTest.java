@@ -26,7 +26,6 @@ import org.apache.flink.core.testutils.MultiShotLatch;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.functions.sink.SinkContextUtil;
 import org.apache.flink.streaming.api.operators.StreamSink;
-import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
 import org.apache.flink.streaming.connectors.kafka.testutils.FakeStandardProducerConfig;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -97,7 +96,7 @@ public class FlinkKafkaProducerBaseTest {
 	public void testPartitionerInvokedWithDeterminatePartitionList() throws Exception {
 		FlinkKafkaPartitioner<String> mockPartitioner = mock(FlinkKafkaPartitioner.class);
 
-		RuntimeContext mockRuntimeContext = mock(StreamingRuntimeContext.class);
+		RuntimeContext mockRuntimeContext = mock(RuntimeContext.class);
 		when(mockRuntimeContext.getIndexOfThisSubtask()).thenReturn(0);
 		when(mockRuntimeContext.getNumberOfParallelSubtasks()).thenReturn(1);
 

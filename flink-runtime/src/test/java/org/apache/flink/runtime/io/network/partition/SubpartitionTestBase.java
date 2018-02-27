@@ -18,15 +18,13 @@
 
 package org.apache.flink.runtime.io.network.partition;
 
-import org.apache.flink.runtime.io.network.buffer.BufferBuilderTestUtils;
-import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
+import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.runtime.io.network.util.TestBufferFactory;
 import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
-import java.io.IOException;
-
-import static org.apache.flink.runtime.io.network.buffer.BufferBuilderTestUtils.createFilledBufferConsumer;
+import static org.apache.flink.runtime.io.network.util.TestBufferFactory.createBuffer;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -52,18 +50,18 @@ public abstract class SubpartitionTestBase extends TestLogger {
 		try {
 			subpartition.finish();
 			assertEquals(1, subpartition.getTotalNumberOfBuffers());
-			assertEquals(0, subpartition.getTotalNumberOfBytes()); // only updated after consuming the buffers
+			assertEquals(4, subpartition.getTotalNumberOfBytes());
 
 			assertEquals(1, subpartition.getTotalNumberOfBuffers());
 			assertEquals(0, subpartition.getBuffersInBacklog());
-			assertEquals(0, subpartition.getTotalNumberOfBytes()); // only updated after consuming the buffers
+			assertEquals(4, subpartition.getTotalNumberOfBytes());
 
-			BufferConsumer bufferConsumer = createFilledBufferConsumer(4096, 4096);
+			Buffer buffer = createBuffer(4096, 4096);
 
-			assertFalse(subpartition.add(bufferConsumer));
+			assertFalse(subpartition.add(buffer));
 			assertEquals(1, subpartition.getTotalNumberOfBuffers());
 			assertEquals(0, subpartition.getBuffersInBacklog());
-			assertEquals(0, subpartition.getTotalNumberOfBytes()); // only updated after consuming the buffers
+			assertEquals(4, subpartition.getTotalNumberOfBytes());
 		} finally {
 			if (subpartition != null) {
 				subpartition.release();
@@ -84,9 +82,9 @@ public abstract class SubpartitionTestBase extends TestLogger {
 			assertEquals(0, subpartition.getBuffersInBacklog());
 			assertEquals(0, subpartition.getTotalNumberOfBytes());
 
-			BufferConsumer bufferConsumer = createFilledBufferConsumer(4096, 4096);
+			Buffer buffer = createBuffer(4096, 4096);
 
-			assertFalse(subpartition.add(bufferConsumer));
+			assertFalse(subpartition.add(buffer));
 			assertEquals(0, subpartition.getTotalNumberOfBuffers());
 			assertEquals(0, subpartition.getBuffersInBacklog());
 			assertEquals(0, subpartition.getTotalNumberOfBytes());
@@ -112,16 +110,16 @@ public abstract class SubpartitionTestBase extends TestLogger {
 	}
 
 	private void verifyViewReleasedAfterParentRelease(ResultSubpartition partition) throws Exception {
-		// Add a bufferConsumer
-		BufferConsumer bufferConsumer = createFilledBufferConsumer(BufferBuilderTestUtils.BUFFER_SIZE);
-		partition.add(bufferConsumer);
+		// Add a buffer
+		Buffer buffer = createBuffer(TestBufferFactory.BUFFER_SIZE);
+		partition.add(buffer);
 		partition.finish();
 
 		// Create the view
 		BufferAvailabilityListener listener = mock(BufferAvailabilityListener.class);
 		ResultSubpartitionView view = partition.createReadView(listener);
 
-		// The added bufferConsumer and end-of-partition event
+		// The added buffer and end-of-partition event
 		assertNotNull(view.getNextBuffer());
 		assertNotNull(view.getNextBuffer());
 
@@ -131,16 +129,5 @@ public abstract class SubpartitionTestBase extends TestLogger {
 
 		// Verify that parent release is reflected at partition view
 		assertTrue(view.isReleased());
-	}
-
-	protected void assertNextBuffer(
-			ResultSubpartitionView readView,
-			int expectedReadableBufferSize,
-			boolean expectedIsMoreAvailable,
-			int expectedBuffersInBacklog) throws IOException, InterruptedException {
-		ResultSubpartition.BufferAndBacklog bufferAndBacklog = readView.getNextBuffer();
-		assertEquals(expectedReadableBufferSize, bufferAndBacklog.buffer().readableBytes());
-		assertEquals(expectedIsMoreAvailable, bufferAndBacklog.isMoreAvailable());
-		assertEquals(expectedBuffersInBacklog, bufferAndBacklog.buffersInBacklog());
 	}
 }

@@ -21,7 +21,6 @@ package org.apache.flink.test.util;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.RestOptions;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.minicluster.JobExecutorService;
 import org.apache.flink.runtime.minicluster.MiniCluster;
@@ -101,7 +100,7 @@ public class MiniClusterResource extends ExternalResource {
 		TestStreamEnvironment.unsetAsContext();
 		TestEnvironment.unsetAsContext();
 
-		final CompletableFuture<?> terminationFuture = jobExecutorService.closeAsync();
+		final CompletableFuture<?> terminationFuture = jobExecutorService.terminate();
 
 		try {
 			terminationFuture.get(
@@ -142,13 +141,8 @@ public class MiniClusterResource extends ExternalResource {
 
 	@Nonnull
 	private JobExecutorService startFlip6MiniCluster() throws Exception {
-		final Configuration configuration = miniClusterResourceConfiguration.getConfiguration();
-
-		// set rest port to 0 to avoid clashes with concurrent MiniClusters
-		configuration.setInteger(RestOptions.REST_PORT, 0);
-
 		final MiniClusterConfiguration miniClusterConfiguration = new MiniClusterConfiguration.Builder()
-			.setConfiguration(configuration)
+			.setConfiguration(miniClusterResourceConfiguration.getConfiguration())
 			.setNumTaskManagers(miniClusterResourceConfiguration.getNumberTaskManagers())
 			.setNumSlotsPerTaskManager(miniClusterResourceConfiguration.getNumberSlotsPerTaskManager())
 			.build();
@@ -156,9 +150,6 @@ public class MiniClusterResource extends ExternalResource {
 		final MiniCluster miniCluster = new MiniCluster(miniClusterConfiguration);
 
 		miniCluster.start();
-
-		// update the port of the rest endpoint
-		configuration.setInteger(RestOptions.REST_PORT, miniCluster.getRestAddress().getPort());
 
 		return miniCluster;
 	}

@@ -26,7 +26,6 @@ import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
-import org.apache.flink.util.Disposable;
 
 import java.io.Serializable;
 
@@ -46,7 +45,7 @@ import java.io.Serializable;
  * @param <OUT> The output type of the operator
  */
 @PublicEvolving
-public interface StreamOperator<OUT> extends CheckpointListener, KeyContext, Disposable, Serializable {
+public interface StreamOperator<OUT> extends CheckpointListener, KeyContext, Serializable {
 
 	// ------------------------------------------------------------------------
 	//  life cycle
@@ -86,7 +85,6 @@ public interface StreamOperator<OUT> extends CheckpointListener, KeyContext, Dis
 	 * <p>This method is expected to make a thorough effort to release all resources
 	 * that the operator has acquired.
 	 */
-	@Override
 	void dispose() throws Exception;
 
 	// ------------------------------------------------------------------------
@@ -101,7 +99,7 @@ public interface StreamOperator<OUT> extends CheckpointListener, KeyContext, Dis
 	 *
 	 * @throws Exception exception that happened during snapshotting.
 	 */
-	OperatorSnapshotFutures snapshotState(
+	OperatorSnapshotResult snapshotState(
 		long checkpointId,
 		long timestamp,
 		CheckpointOptions checkpointOptions,

@@ -21,10 +21,12 @@ package org.apache.flink.table.sources
 import java.util.{ServiceConfigurationError, ServiceLoader}
 
 import org.apache.flink.table.api.{AmbiguousTableSourceException, NoMatchingTableSourceException, TableException, ValidationException}
-import org.apache.flink.table.descriptors.ConnectorDescriptorValidator.CONNECTOR_PROPERTY_VERSION
-import org.apache.flink.table.descriptors.FormatDescriptorValidator.FORMAT_PROPERTY_VERSION
-import org.apache.flink.table.descriptors.MetadataValidator.METADATA_PROPERTY_VERSION
-import org.apache.flink.table.descriptors.StatisticsValidator.STATISTICS_PROPERTY_VERSION
+import org.apache.flink.table.descriptors.ConnectorDescriptorValidator.CONNECTOR_VERSION
+import org.apache.flink.table.descriptors.FormatDescriptorValidator.FORMAT_VERSION
+import org.apache.flink.table.descriptors.MetadataValidator.METADATA_VERSION
+import org.apache.flink.table.descriptors.RowtimeValidator.ROWTIME_VERSION
+import org.apache.flink.table.descriptors.SchemaValidator.SCHEMA_VERSION
+import org.apache.flink.table.descriptors.StatisticsValidator.STATISTICS_VERSION
 import org.apache.flink.table.descriptors._
 import org.apache.flink.table.util.Logging
 
@@ -38,13 +40,13 @@ object TableSourceFactoryService extends Logging {
 
   private lazy val loader = ServiceLoader.load(classOf[TableSourceFactory[_]])
 
-  def findAndCreateTableSource(descriptor: TableSourceDescriptor): TableSource[_] = {
+  def findTableSourceFactory(descriptor: TableSourceDescriptor): TableSource[_] = {
     val properties = new DescriptorProperties()
     descriptor.addProperties(properties)
-    findAndCreateTableSource(properties.asMap.asScala.toMap)
+    findTableSourceFactory(properties.asMap)
   }
 
-  def findAndCreateTableSource(properties: Map[String, String]): TableSource[_] = {
+  def findTableSourceFactory(properties: Map[String, String]): TableSource[_] = {
     var matchingFactory: Option[(TableSourceFactory[_], Seq[String])] = None
     try {
       val iter = loader.iterator()
@@ -71,10 +73,12 @@ object TableSourceFactoryService extends Logging {
         plainContext ++= requiredContext
         // we remove the versions for now until we have the first backwards compatibility case
         // with the version we can provide mappings in case the format changes
-        plainContext.remove(CONNECTOR_PROPERTY_VERSION)
-        plainContext.remove(FORMAT_PROPERTY_VERSION)
-        plainContext.remove(METADATA_PROPERTY_VERSION)
-        plainContext.remove(STATISTICS_PROPERTY_VERSION)
+        plainContext.remove(CONNECTOR_VERSION)
+        plainContext.remove(FORMAT_VERSION)
+        plainContext.remove(SCHEMA_VERSION)
+        plainContext.remove(ROWTIME_VERSION)
+        plainContext.remove(METADATA_VERSION)
+        plainContext.remove(STATISTICS_VERSION)
 
         // check if required context is met
         if (plainContext.forall(e => properties.contains(e._1) && properties(e._1) == e._2)) {
@@ -123,8 +127,7 @@ object TableSourceFactoryService extends Logging {
       if (!supportedProperties.contains(k)) {
         throw new ValidationException(
           s"Table factory '${factory.getClass.getCanonicalName}' does not support the " +
-          s"property '$k'. Supported properties are: \n" +
-          s"${supportedProperties.map(DescriptorProperties.toString).mkString("\n")}")
+          s"property '$k'. Supported properties are: \n${supportedProperties.mkString("\n")}")
       }
     }
 

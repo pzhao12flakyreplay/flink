@@ -58,7 +58,6 @@ import org.apache.flink.runtime.state.CompletedCheckpointStorageLocation;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.OperatorStateBackend;
 import org.apache.flink.runtime.state.OperatorStateHandle;
-import org.apache.flink.runtime.state.SnapshotResult;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.state.TestTaskStateManager;
 import org.apache.flink.runtime.state.memory.MemoryBackendCheckpointStorage;
@@ -75,7 +74,6 @@ import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.SerializedValue;
 import org.apache.flink.util.TestLogger;
 
-import org.junit.Assert;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -83,7 +81,6 @@ import java.util.Collections;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Matchers.any;
@@ -99,6 +96,7 @@ public class StreamTaskTerminationTest extends TestLogger {
 	public static final OneShotLatch RUN_LATCH = new OneShotLatch();
 	public static final OneShotLatch CHECKPOINTING_LATCH = new OneShotLatch();
 	private static final OneShotLatch CLEANUP_LATCH = new OneShotLatch();
+	private static final OneShotLatch HANDLE_ASYNC_EXCEPTION_LATCH = new OneShotLatch();
 
 	/**
 	 * FLINK-6833
@@ -210,7 +208,8 @@ public class StreamTaskTerminationTest extends TestLogger {
 		}
 
 		@Override
-		protected void init() {
+		protected void init() throws Exception {
+
 		}
 
 		@Override
@@ -226,16 +225,24 @@ public class StreamTaskTerminationTest extends TestLogger {
 			// has been stopped
 			CLEANUP_LATCH.trigger();
 
-			// wait until all async checkpoint threads are terminated, so that no more exceptions can be reported
-			Assert.assertTrue(getAsyncOperationsThreadPool().awaitTermination(30L, TimeUnit.SECONDS));
+			// wait until handle async exception has been called to proceed with the termination of the
+			// StreamTask
+			HANDLE_ASYNC_EXCEPTION_LATCH.await();
 		}
 
 		@Override
-		protected void cancelTask() {
+		protected void cancelTask() throws Exception {
+		}
+
+		@Override
+		public void handleAsyncException(String message, Throwable exception) {
+			super.handleAsyncException(message, exception);
+
+			HANDLE_ASYNC_EXCEPTION_LATCH.trigger();
 		}
 	}
 
-	private static class NoOpStreamOperator<T> extends AbstractStreamOperator<T> {
+	static class NoOpStreamOperator<T> extends AbstractStreamOperator<T> {
 		private static final long serialVersionUID = 4517845269225218312L;
 	}
 
@@ -244,7 +251,7 @@ public class StreamTaskTerminationTest extends TestLogger {
 		private static final long serialVersionUID = -5053068148933314100L;
 
 		@Override
-		public CompletedCheckpointStorageLocation resolveCheckpoint(String pointer) {
+		public CompletedCheckpointStorageLocation resolveCheckpoint(String pointer) throws IOException {
 			throw new UnsupportedOperationException();
 		}
 
@@ -261,7 +268,7 @@ public class StreamTaskTerminationTest extends TestLogger {
 			TypeSerializer<K> keySerializer,
 			int numberOfKeyGroups,
 			KeyGroupRange keyGroupRange,
-			TaskKvStateRegistry kvStateRegistry) {
+			TaskKvStateRegistry kvStateRegistry) throws IOException {
 			return null;
 		}
 
@@ -275,10 +282,10 @@ public class StreamTaskTerminationTest extends TestLogger {
 		}
 	}
 
-	static class BlockingCallable implements Callable<SnapshotResult<OperatorStateHandle>> {
+	static class BlockingCallable implements Callable<OperatorStateHandle> {
 
 		@Override
-		public SnapshotResult<OperatorStateHandle> call() throws Exception {
+		public OperatorStateHandle call() throws Exception {
 			// notify that we have started the asynchronous checkpointed operation
 			CHECKPOINTING_LATCH.trigger();
 			// wait until we have reached the StreamTask#cleanup --> This will already cancel this FutureTask

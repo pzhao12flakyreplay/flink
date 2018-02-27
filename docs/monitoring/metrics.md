@@ -1190,12 +1190,6 @@ Thus, in order to infer the metric identifier:
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>Job (only available on TaskManager)</strong></th>
-      <td>&lt;source_id&gt;.&lt;source_subtask_index&gt;.&lt;operator_id&gt;.&lt;operator_subtask_index&gt;.latency</td>
-      <td>The latency distributions from a given source subtask to an operator subtask (in milliseconds).</td>
-      <td>Histogram</td>
-    </tr>
-    <tr>
       <th rowspan="6"><strong>Task</strong></th>
       <td>numBytesInLocal</td>
       <td>The total number of bytes this task has read from a local source.</td>
@@ -1253,7 +1247,7 @@ Thus, in order to infer the metric identifier:
       <td>Counter</td>
     </tr>
     <tr>
-      <th rowspan="5"><strong>Operator</strong></th>
+      <th rowspan="6"><strong>Operator</strong></th>
       <td>currentInputWatermark</td>
       <td>
         The last watermark this operator has received (in milliseconds).
@@ -1283,6 +1277,11 @@ Thus, in order to infer the metric identifier:
         The last watermark this operator has emitted (in milliseconds).
       </td>
       <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>latency</td>
+      <td>The latency distributions from all incoming sources (in milliseconds).</td>
+      <td>Histogram</td>
     </tr>
     <tr>
       <td>numSplitsProcessed</td>

@@ -27,6 +27,7 @@ import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.io.network.api.CancelCheckpointMarker;
 import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
+import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.groups.OperatorIOMetricGroup;
 import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
@@ -43,6 +44,8 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.io.RecordWriterOutput;
 import org.apache.flink.streaming.runtime.io.StreamRecordWriter;
 import org.apache.flink.streaming.runtime.metrics.WatermarkGauge;
+import org.apache.flink.streaming.runtime.partitioner.ConfigurableStreamPartitioner;
+import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.streamstatus.StreamStatus;
@@ -89,9 +92,7 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 	 */
 	private StreamStatus streamStatus = StreamStatus.ACTIVE;
 
-	public OperatorChain(
-			StreamTask<OUT, OP> containingTask,
-			List<StreamRecordWriter<SerializationDelegate<StreamRecord<OUT>>>> streamRecordWriters) {
+	public OperatorChain(StreamTask<OUT, OP> containingTask) {
 
 		final ClassLoader userCodeClassloader = containingTask.getUserCodeClassLoader();
 		final StreamConfig configuration = containingTask.getConfiguration();
@@ -99,7 +100,8 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 		headOperator = configuration.getStreamOperator(userCodeClassloader);
 
 		// we read the chained configs, and the order of record writer registrations by output name
-		Map<Integer, StreamConfig> chainedConfigs = configuration.getTransitiveChainedTaskConfigsWithSelf(userCodeClassloader);
+		Map<Integer, StreamConfig> chainedConfigs = configuration.getTransitiveChainedTaskConfigs(userCodeClassloader);
+		chainedConfigs.put(configuration.getVertexID(), configuration);
 
 		// create the final output stream writers
 		// we iterate through all the out edges from this job vertex and create a stream output
@@ -114,10 +116,11 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 				StreamEdge outEdge = outEdgesInOrder.get(i);
 
 				RecordWriterOutput<?> streamOutput = createStreamOutput(
-					streamRecordWriters.get(i),
 					outEdge,
 					chainedConfigs.get(outEdge.getSourceId()),
-					containingTask.getEnvironment());
+					i,
+					containingTask.getEnvironment(),
+					containingTask.getName());
 
 				this.streamOutputs[i] = streamOutput;
 				streamOutputMap.put(outEdge, streamOutput);
@@ -154,6 +157,7 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 				for (RecordWriterOutput<?> output : this.streamOutputs) {
 					if (output != null) {
 						output.close();
+						output.clearBuffers();
 					}
 				}
 			}
@@ -235,8 +239,16 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 	 * <p>This method should never fail.
 	 */
 	public void releaseOutputs() {
-		for (RecordWriterOutput<?> streamOutput : streamOutputs) {
-			streamOutput.close();
+		try {
+			for (RecordWriterOutput<?> streamOutput : streamOutputs) {
+				streamOutput.close();
+			}
+		}
+		finally {
+			// make sure that we release the buffers in any case
+			for (RecordWriterOutput<?> output : streamOutputs) {
+				output.clearBuffers();
+			}
 		}
 	}
 
@@ -368,11 +380,12 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 		return currentOperatorOutput;
 	}
 
-	private RecordWriterOutput<OUT> createStreamOutput(
-			StreamRecordWriter<SerializationDelegate<StreamRecord<OUT>>> streamRecordWriter,
+	private <T> RecordWriterOutput<T> createStreamOutput(
 			StreamEdge edge,
 			StreamConfig upStreamConfig,
-			Environment taskEnvironment) {
+			int outputIndex,
+			Environment taskEnvironment,
+			String taskName) {
 		OutputTag sideOutputTag = edge.getOutputTag(); // OutputTag, return null if not sideOutput
 
 		TypeSerializer outSerializer = null;
@@ -386,7 +399,26 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 			outSerializer = upStreamConfig.getTypeSerializerOut(taskEnvironment.getUserClassLoader());
 		}
 
-		return new RecordWriterOutput<>(streamRecordWriter, outSerializer, sideOutputTag, this);
+		@SuppressWarnings("unchecked")
+		StreamPartitioner<T> outputPartitioner = (StreamPartitioner<T>) edge.getPartitioner();
+
+		LOG.debug("Using partitioner {} for output {} of task ", outputPartitioner, outputIndex, taskName);
+
+		ResultPartitionWriter bufferWriter = taskEnvironment.getWriter(outputIndex);
+
+		// we initialize the partitioner here with the number of key groups (aka max. parallelism)
+		if (outputPartitioner instanceof ConfigurableStreamPartitioner) {
+			int numKeyGroups = bufferWriter.getNumTargetKeyGroups();
+			if (0 < numKeyGroups) {
+				((ConfigurableStreamPartitioner) outputPartitioner).configure(numKeyGroups);
+			}
+		}
+
+		StreamRecordWriter<SerializationDelegate<StreamRecord<T>>> output =
+				new StreamRecordWriter<>(bufferWriter, outputPartitioner, upStreamConfig.getBufferTimeout());
+		output.setMetricGroup(taskEnvironment.getMetricGroup().getIOMetricGroup());
+
+		return new RecordWriterOutput<>(output, outSerializer, sideOutputTag, this);
 	}
 
 	// ------------------------------------------------------------------------
@@ -559,20 +591,17 @@ public class OperatorChain<OUT, OP extends StreamOperator<OUT>> implements Strea
 				operator.setKeyContextElement1(copy);
 				operator.processElement(copy);
 			} catch (ClassCastException e) {
-				if (outputTag != null) {
-					// Enrich error message
-					ClassCastException replace = new ClassCastException(
-						String.format(
-							"%s. Failed to push OutputTag with id '%s' to operator. " +
-								"This can occur when multiple OutputTags with different types " +
-								"but identical names are being used.",
-							e.getMessage(),
-							outputTag.getId()));
+				// Enrich error message
+				ClassCastException replace = new ClassCastException(
+					String.format(
+						"%s. Failed to push OutputTag with id '%s' to operator. " +
+						"This can occur when multiple OutputTags with different types " +
+						"but identical names are being used.",
+						e.getMessage(),
+						outputTag.getId()));
 
-					throw new ExceptionInChainedOperatorException(replace);
-				} else {
-					throw new ExceptionInChainedOperatorException(e);
-				}
+				throw new ExceptionInChainedOperatorException(replace);
+
 			} catch (Exception e) {
 				throw new ExceptionInChainedOperatorException(e);
 			}

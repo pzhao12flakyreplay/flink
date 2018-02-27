@@ -22,12 +22,13 @@ import org.apache.calcite.avatica.util.{DateTimeUtils, TimeUnitRange}
 import org.apache.calcite.util.BuiltInMethod
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo._
 import org.apache.flink.api.common.typeinfo._
+import org.apache.flink.api.common.typeutils.CompositeType
 import org.apache.flink.api.java.typeutils.{MapTypeInfo, ObjectArrayTypeInfo, RowTypeInfo}
 import org.apache.flink.table.codegen.CodeGenUtils._
 import org.apache.flink.table.codegen.calls.CallGenerator.generateCallIfArgsNotNull
 import org.apache.flink.table.codegen.{CodeGenException, CodeGenerator, GeneratedExpression}
-import org.apache.flink.table.typeutils.TypeCheckUtils._
 import org.apache.flink.table.typeutils.{TimeIndicatorTypeInfo, TimeIntervalTypeInfo, TypeCoercion}
+import org.apache.flink.table.typeutils.TypeCheckUtils._
 
 object ScalarOperators {
 
@@ -1168,9 +1169,9 @@ object ScalarOperators {
       s"""
          |${map.code}
          |${key.code}
-         |$resultTypeTerm $resultTerm = (${map.nullTerm} || ${key.nullTerm}) ?
+         |boolean $nullTerm = (${map.nullTerm} || ${key.nullTerm});
+         |$resultTypeTerm $resultTerm = $nullTerm ?
          |  null : ($resultTypeTerm) ${map.resultTerm}.get(${key.resultTerm});
-         |boolean $nullTerm = $resultTerm == null;
          |""".stripMargin
     } else {
       s"""
@@ -1180,14 +1181,7 @@ object ScalarOperators {
          | ${map.resultTerm}.get(${key.resultTerm});
          |""".stripMargin
     }
-    val unboxing = codeGenerator.generateInputFieldUnboxing(resultType, resultTerm)
-
-    unboxing.copy(code =
-      s"""
-         |$accessCode
-         |${unboxing.code}
-         |""".stripMargin
-    )
+    GeneratedExpression(resultTerm, nullTerm, accessCode, resultType)
   }
 
   def generateMapCardinality(

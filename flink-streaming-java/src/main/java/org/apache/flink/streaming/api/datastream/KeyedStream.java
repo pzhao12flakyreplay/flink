@@ -120,37 +120,12 @@ public class KeyedStream<T, KEY> extends DataStream<T> {
 	 *            Function for determining state partitions
 	 */
 	public KeyedStream(DataStream<T> dataStream, KeySelector<T, KEY> keySelector, TypeInformation<KEY> keyType) {
-		this(
-			dataStream,
+		super(
+			dataStream.getExecutionEnvironment(),
 			new PartitionTransformation<>(
 				dataStream.getTransformation(),
-				new KeyGroupStreamPartitioner<>(keySelector, StreamGraphGenerator.DEFAULT_LOWER_BOUND_MAX_PARALLELISM)),
-			keySelector,
-			keyType);
-	}
-
-	/**
-	 * Creates a new {@link KeyedStream} using the given {@link KeySelector} and {@link TypeInformation}
-	 * to partition operator state by key, where the partitioning is defined by a {@link PartitionTransformation}.
-	 *
-	 * @param stream
-	 *            Base stream of data
-	 * @param partitionTransformation
-	 *            Function that determines how the keys are distributed to downstream operator(s)
-	 * @param keySelector
-	 *            Function to extract keys from the base stream
-	 * @param keyType
-	 *            Defines the type of the extracted keys
-	 */
-	@Internal
-	KeyedStream(
-		DataStream<T> stream,
-		PartitionTransformation<T> partitionTransformation,
-		KeySelector<T, KEY> keySelector,
-		TypeInformation<KEY> keyType) {
-
-		super(stream.getExecutionEnvironment(), partitionTransformation);
-		this.keySelector = clean(keySelector);
+				new KeyGroupStreamPartitioner<>(keySelector, StreamGraphGenerator.DEFAULT_LOWER_BOUND_MAX_PARALLELISM)));
+		this.keySelector = keySelector;
 		this.keyType = validateKeyType(keyType);
 	}
 

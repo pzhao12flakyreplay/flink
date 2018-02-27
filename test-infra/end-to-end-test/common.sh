@@ -23,6 +23,10 @@ if [[ -z $FLINK_DIR ]]; then
     echo "FLINK_DIR needs to point to a Flink distribution directory"
     exit 1
 fi
+if [[ -z $CLUSTER_MODE ]]; then
+    echo "CLUSTER_MODE needs to be one of local or cluster."
+    exit 1
+fi
 
 export PASS=1
 
@@ -40,27 +44,38 @@ export TEST_DATA_DIR=$TEST_INFRA_DIR/temp-test-directory-$(date +%S%N)
 echo "TEST_DATA_DIR: $TEST_DATA_DIR"
 
 function start_cluster {
-  "$FLINK_DIR"/bin/start-cluster.sh
+  if [[ "$CLUSTER_MODE" == "local" ]]; then
+    $FLINK_DIR/bin/start-local.sh
+  elif [[ "$CLUSTER_MODE" == "cluster" ]]; then
+    $FLINK_DIR/bin/start-cluster.sh
+  else
+    echo "Unrecognized cluster mode: $CLUSTER_MODE"
+    exit
+  fi
 
-  # wait at most 10 seconds until the dispatcher is up
+  # wait for TaskManager to come up
+  # wait roughly 10 seconds
   for i in {1..10}; do
     # without the || true this would exit our script if the JobManager is not yet up
-    QUERY_RESULT=$(curl "http://localhost:9065/taskmanagers" 2> /dev/null || true)
+    QUERY_RESULT=$(curl "http://localhost:8081/taskmanagers" || true)
 
     if [[ "$QUERY_RESULT" == "" ]]; then
-      echo "Dispatcher/TaskManagers are not yet up"
+     echo "JobManager is not yet up"
     elif [[ "$QUERY_RESULT" != "{\"taskmanagers\":[]}" ]]; then
-      echo "Dispatcher REST endpoint is up."
       break
     fi
 
-    echo "Waiting for dispatcher REST endpoint to come up..."
+    echo "Waiting for cluster to come up..."
     sleep 1
   done
 }
 
 function stop_cluster {
-  "$FLINK_DIR"/bin/stop-cluster.sh
+  if [[ "$CLUSTER_MODE" == "local" ]]; then
+    $FLINK_DIR/bin/stop-local.sh
+  elif [[ "$CLUSTER_MODE" == "cluster" ]]; then
+    $FLINK_DIR/bin/stop-cluster.sh
+  fi
 
   if grep -rv "GroupCoordinatorNotAvailableException" $FLINK_DIR/log \
       | grep -v "RetriableCommitFailedException" \
@@ -74,7 +89,6 @@ function stop_cluster {
       | grep -v '^INFO:.*AWSErrorCode=\[400 Bad Request\].*ServiceEndpoint=\[https://.*\.s3\.amazonaws\.com\].*RequestType=\[HeadBucketRequest\]' \
       | grep -v "RejectedExecutionException" \
       | grep -v "An exception was thrown by an exception handler" \
-      | grep -v "java.lang.NoClassDefFoundError: org/apache/hadoop/yarn/exceptions/YarnException" \
       | grep -iq "error"; then
     echo "Found error in log files:"
     cat $FLINK_DIR/log/*
@@ -91,8 +105,6 @@ function stop_cluster {
       | grep -v '^INFO:.*AWSErrorCode=\[400 Bad Request\].*ServiceEndpoint=\[https://.*\.s3\.amazonaws\.com\].*RequestType=\[HeadBucketRequest\]' \
       | grep -v "RejectedExecutionException" \
       | grep -v "An exception was thrown by an exception handler" \
-      | grep -v "Caused by: java.lang.ClassNotFoundException: org.apache.hadoop.yarn.exceptions.YarnException" \
-      | grep -v "java.lang.NoClassDefFoundError: org/apache/hadoop/yarn/exceptions/YarnException" \
       | grep -iq "exception"; then
     echo "Found exception in log files:"
     cat $FLINK_DIR/log/*

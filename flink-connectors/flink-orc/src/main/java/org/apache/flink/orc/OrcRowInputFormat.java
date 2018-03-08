@@ -394,25 +394,6 @@ public class OrcRowInputFormat extends FileInputFormat<Row> implements ResultTyp
 	}
 
 	// --------------------------------------------------------------------------------------------
-	//  Getter methods for tests
-	// --------------------------------------------------------------------------------------------
-
-	@VisibleForTesting
-	Configuration getConfiguration() {
-		return conf;
-	}
-
-	@VisibleForTesting
-	int getBatchSize() {
-		return batchSize;
-	}
-
-	@VisibleForTesting
-	String getSchema() {
-		return schema.toString();
-	}
-
-	// --------------------------------------------------------------------------------------------
 	//  Classes to define predicates
 	// --------------------------------------------------------------------------------------------
 
